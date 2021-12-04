@@ -3,6 +3,7 @@ import time
 import numpy as np
 import gym
 from gym.spaces import Box, Discrete
+# from gym.envs.classic_control.CartPole import
 
 import torch
 import torch.nn as nn
@@ -17,161 +18,208 @@ from pg_buffer import PGBuffer
 from collections import defaultdict
 
 from torch.utils.tensorboard import SummaryWriter
+import PIL
 
-
-# import PIL
 
 def main(args):
-    # create environment 
-    env = gym.make(args.env)
-    env.seed(args.seed)
-    obs_dim = env.observation_space.shape[0]
-    if isinstance(env.action_space, Discrete):
-        discrete = True
-        act_dim = env.action_space.n
-    else:
-        discrete = False
-        act_dim = env.action_space.shape[0]
-
-    # actor critic 
-    ac = ActorCritic(obs_dim, act_dim, discrete).to(args.device)
+    n_mus = 2
+    obs_dim_input = 4 + n_mus
+    act_input = 2
+    discrete = True
+    # actor critic
+    ac = ActorCritic(obs_dim_input, act_input, discrete).to(args.device)
     print('Number of parameters', count_vars(ac))
 
-    # Set up experience buffer
-    steps_per_epoch = int(args.steps_per_epoch)
-    buf = PGBuffer(obs_dim, act_dim, discrete, steps_per_epoch, args)
-    logs = defaultdict(lambda: [])
-    writer = SummaryWriter(args_to_str(args))
-    gif_frames = []
+    for k_index in range(args.K):
+        # create environment
+        env = gym.make(args.env)
+        env.seed(args.seed)
 
-    # Set up function for computing policy loss
-    def compute_loss_pi(batch):
-        obs, act, psi, logp_old = batch['obs'], batch['act'], batch['psi'], batch['logp']
-        pi, logp = ac.pi(obs, act)
+        print("env gravity, env.masscart, env.masspole, env.length", env.gravity, env.masscart, env.masspole,
+              env.length)  # ;stop
+        # print("observation_space", env.observation_space, env.observation_space.shape)#;stop
+        # print("env.action_space", env.action_space)
 
-        # Policy loss
-        if args.loss_mode == 'vpg':
-            loss_pi = -(psi*logp).mean()
-        elif args.loss_mode == 'ppo':
-            ratio = (logp - logp_old).exp()
-            surr_loss = ratio * psi
-            clipped_loss = torch.clamp(ratio, 1.0 - args.clip_ratio, 1.0 + args.clip_ratio) * psi
-            loss_pi = -torch.min(surr_loss, clipped_loss).mean()
+        '''Next Task
+        - Implement OSI
+        - Display with tensorbaord'''
+
+        new = [env.gravity, env.masscart, env.length][:n_mus]
+        use_dyn = True
+        env_params = []
+
+        if use_dyn:
+            env_params.extend(new)
+
+        obs_dim = env.observation_space.shape[0] + len(env_params)  # print("obs_dim", obs_dim);stop
+        if isinstance(env.action_space, Discrete):
+            discrete = True
+            act_dim = env.action_space.n
         else:
-            raise Exception('Invalid loss_mode option', args.loss_mode)
+            discrete = False
+            act_dim = env.action_space.shape[0]
 
-        # Useful extra info
-        approx_kl = (logp_old - logp).mean().item()
-        ent = pi.entropy().mean().item()
-        pi_info = dict(kl=approx_kl, ent=ent)
+        # print("discrete", discrete); stop
 
-        return loss_pi, pi_info
+        # Set up experience buffer
+        steps_per_epoch = int(args.steps_per_epoch)
+        buf = PGBuffer(obs_dim, act_dim, discrete, steps_per_epoch, args)
+        logs = defaultdict(lambda: [])
+        writer = SummaryWriter(args_to_str(args))
+        gif_frames = []
 
-    # Set up function for computing value loss
-    def compute_loss_v(batch):
-        obs, ret = batch['obs'], batch['ret']
-        v = ac.v(obs)
-        loss_v = torch.square(torch.subtract(v, ret)).mean()
-        return loss_v
+        # Set up function for computing policy loss
+        def compute_loss_pi(batch):
+            obs, act, psi, logp_old = batch['obs'], batch['act'], batch['psi'], batch['logp']
+            pi, logp = ac.pi(obs, act)
 
-    # Set up optimizers for policy and value function
-    pi_optimizer = Adam(ac.pi.parameters(), lr=args.pi_lr)
-    vf_optimizer = Adam(ac.v.parameters(), lr=args.v_lr)
+            # Policy loss
+            if args.loss_mode == 'vpg':
+                loss_pi = -(psi * logp).mean()
 
-    # Set up update function
-    def update():
-        batch = buf.get()
+            elif args.loss_mode == 'ppo':
+                ratio = (logp - logp_old).exp()
+                surr_loss = ratio * psi
+                clipped_loss = torch.clamp(ratio, 1.0 - args.clip_ratio, 1.0 + args.clip_ratio) * psi
+                loss_pi = -torch.min(surr_loss, clipped_loss).mean()
 
-        # Get loss and info values before update
-        pi_l_old, pi_info_old = compute_loss_pi(batch)
-        pi_l_old = pi_l_old.item()
-        v_l_old = compute_loss_v(batch).item()
+            else:
+                raise Exception('Invalid loss_mode option', args.loss_mode)
 
-        # Policy learning
-        for i in range(args.train_pi_iters):
-            pi_optimizer.zero_grad()
-            loss_pi, pi_info = compute_loss_pi(batch)
-            loss_pi.backward()
-            pi_optimizer.step()
+            # Useful extra info
+            approx_kl = (logp_old - logp).mean().item()
+            ent = pi.entropy().mean().item()
+            pi_info = dict(kl=approx_kl, ent=ent)
 
-        # Value function learning
-        for i in range(args.train_v_iters):
-            vf_optimizer.zero_grad()
-            loss_v = compute_loss_v(batch)
-            loss_v.backward()
-            vf_optimizer.step()
+            return loss_pi, pi_info
 
-        # Log changes from update
-        kl, ent = pi_info['kl'], pi_info_old['ent']
-        logs['kl'] += [kl]
-        logs['ent'] += [ent]
-        logs['loss_v'] += [loss_v.item()]
-        logs['loss_pi'] += [loss_pi.item()]
+        # Set up function for computing value loss
+        def compute_loss_v(batch):
+            obs, ret = batch['obs'], batch['ret']
+            v = ac.v(obs)
+            loss_v = ((v - ret) ** 2).mean()
+            return loss_v
 
-    # Prepare for interaction with environment
-    start_time = time.time()
-    o, ep_ret, ep_len = env.reset(), 0, 0
+        # Set up optimizers for policy and value function
+        pi_optimizer = Adam(ac.pi.parameters(), lr=args.pi_lr)
+        vf_optimizer = Adam(ac.v.parameters(), lr=args.v_lr)
 
-    ep_count = 0  # just for logging purpose, number of episodes run
-    # Main loop: collect experience in env and update/log each epoch
-    for epoch in range(args.epochs):
-        for t in range(steps_per_epoch):
-            a, v, logp = ac.step(torch.as_tensor(o, dtype=torch.float32).to(args.device))
+        # Set up update function
+        def update():
+            batch = buf.get()
 
-            next_o, r, d, _ = env.step(a)
-            ep_ret += r
-            ep_len += 1
+            # Get loss and info values before update
+            pi_l_old, pi_info_old = compute_loss_pi(batch)
+            pi_l_old = pi_l_old.item()
+            v_l_old = compute_loss_v(batch).item()
 
-            # save and log
-            buf.store(o, a, r, v, logp)
-            if ep_count % 100 == 0:
-                # frame = env.render(mode='rgb_array') uncomment this line if you want to log to tensorboard (can be
-                # memory intensive) gif_frames.append(frame) gif_frames.append(PIL.Image.fromarray(frame).resize([64,
-                # 64]))
-                # you can try this downsize version if you are resource constrained
-                time.sleep(0.01)
+            # Policy learning
+            for i in range(args.train_pi_iters):
+                pi_optimizer.zero_grad()
+                loss_pi, pi_info = compute_loss_pi(batch)
+                loss_pi.backward()
+                pi_optimizer.step()
 
-            # Update obs (critical!)
-            o = next_o
+            # Value function learning
+            for i in range(args.train_v_iters):
+                vf_optimizer.zero_grad()
+                loss_v = compute_loss_v(batch)
+                loss_v.backward()
+                vf_optimizer.step()
 
-            timeout = ep_len == args.max_ep_len
-            terminal = d or timeout
-            epoch_ended = t == steps_per_epoch - 1
+            # Log changes from update
+            kl, ent = pi_info['kl'], pi_info_old['ent']
+            logs['kl'] += [kl]
+            logs['ent'] += [ent]
+            logs['loss_v'] += [loss_v.item()]
+            logs['loss_pi'] += [loss_pi.item()]
 
-            if terminal or epoch_ended:
-                # if trajectory didn't reach terminal state, bootstrap value target
-                if timeout or epoch_ended:
-                    _, v, _ = ac.step(torch.as_tensor(o, dtype=torch.float32).to(args.device))
-                else:
-                    v = 0
-                buf.finish_path(v)
-                if terminal:
-                    # only save EpRet / EpLen if trajectory finished
-                    logs['ep_ret'] += [ep_ret]
-                    logs['ep_len'] += [ep_len]
-                    ep_count += 1
+        # Prepare for interaction with environment
+        start_time = time.time()
+        o, ep_ret, ep_len = env.reset(), 0, 0;  # print("o", o)
+        # o = np.concatenate((o, env_params), dtype=np.float32)  # print("o", o)
+        o = np.concatenate((o, env_params))
+        # print("torch cat", np.concatenate((o, env_params), axis=None, dtype=np.float32).shape);stop
 
-                o, ep_ret, ep_len = env.reset(), 0, 0
+        ep_count = 0  # just for logging purpose, number of episodes run
+        # K = 10
+        # Main loop: collect experience in env and update/log each epoch
+        for epoch in range(args.epochs):
+            for t in range(steps_per_epoch):
+                a, v, logp = ac.step(torch.as_tensor(o, dtype=torch.float32).to(args.device))
 
-                # save a video to tensorboard so you can view later
-                if len(gif_frames) != 0:
-                    vid = np.stack(gif_frames)
-                    vid_tensor = vid.transpose(0, 3, 1, 2)[None]
-                    writer.add_video('rollout', vid_tensor, epoch, fps=50)
-                    gif_frames = []
-                    writer.flush()
-                    print('wrote video')
+                next_o, r, d, _ = env.step(a)
+                # print("next_o", next_o)
+                # next_o = np.concatenate((next_o, env_params), dtype=np.float32)  # print("next_o", next_o); stop
+                next_o = np.concatenate((next_o, env_params))
+                ep_ret += r
+                ep_len += 1
 
-        # Perform VPG update!
-        update()
+                # save and log
+                buf.store(o, a, r, v, logp)
+                if ep_count % 100 == 0:
+                    # uncomment this line if you want to log to tensorboard (can be memory intensive)
+                    # frame = env.render(mode='rgb_array')
+                    # gif_frames.append(frame)
+                    # you can try this downsize version if you are resource constrained
+                    # gif_frames.append(PIL.Image.fromarray(frame).resize([64,64]))
 
-        if epoch % 10 == 0:
-            vals = {key: np.mean(val) for key, val in logs.items()}
-            for key in vals:
-                writer.add_scalar(key, vals[key], epoch)
-            writer.flush()
-            print('Epoch', epoch, vals)
-            logs = defaultdict(lambda: [])
+                    time.sleep(0.01)
+
+                # Update obs (critical!)
+                o = next_o
+
+                timeout = ep_len == args.max_ep_len
+                terminal = d or timeout
+                epoch_ended = t == steps_per_epoch - 1
+
+                if terminal or epoch_ended:
+                    # if trajectory didn't reach terminal state, bootstrap value target
+                    if timeout or epoch_ended:
+                        # print("Got here1");stop
+                        _, v, _ = ac.step(torch.as_tensor(o, dtype=torch.float32).to(args.device))
+                    else:
+                        v = 0
+                    buf.finish_path(v)
+                    if terminal:
+                        # only save EpRet / EpLen if trajectory finished
+                        logs['ep_ret'] += [ep_ret]
+                        logs['ep_len'] += [ep_len]
+                        ep_count += 1
+
+                    # print("Got here2");stop
+                    '''Testing out resampling for env parameters'''
+                    # create environment
+                    env = gym.make(args.env)
+                    env.seed(args.seed)
+                    # -----------------------------------------------
+
+                    o, ep_ret, ep_len = env.reset(), 0, 0
+                    # o = np.concatenate((o, env_params), dtype=np.float32)
+                    o = np.concatenate((o, env_params))
+                    # save a video to tensorboard so you can view later
+                    if len(gif_frames) != 0:
+                        vid = np.stack(gif_frames)
+                        vid_tensor = vid.transpose(0, 3, 1, 2)[None]
+                        writer.add_video('rollout', vid_tensor, epoch, fps=50)
+                        gif_frames = []
+                        writer.flush()
+                        print('wrote video')
+
+            # Perform VPG update!
+            update()
+
+            if epoch % 10 == 0:
+                vals = {key: np.mean(val) for key, val in logs.items()}
+                for key in vals:
+                    writer.add_scalar(key, vals[key], epoch)
+                writer.flush()
+                print('Epoch', epoch, vals)
+                logs = defaultdict(lambda: [])
+
+    # #if -save_weights then save weights
+    PATH = './logs/Weight_default.pth'
+    torch.save(ac, PATH)
 
 
 if __name__ == '__main__':
@@ -179,10 +227,11 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('--env', type=str, default='LunarLander-v2',
+    parser.add_argument('--env', type=str, default='CartPole-v0',
                         help='[CartPole-v0, LunarLander-v2, LunarLanderContinuous-v2, others]')
 
     parser.add_argument('--epochs', type=int, default=1000, help='Number of epochs to run')
+    parser.add_argument('--K', type=int, default=10, help='Number of K envs to run')
     parser.add_argument('--gamma', type=float, default=0.99, help='discount factor')
     parser.add_argument('--lam', type=float, default=0.97, help='GAE-lambda factor')
     parser.add_argument('--seed', type=int, default=42)
