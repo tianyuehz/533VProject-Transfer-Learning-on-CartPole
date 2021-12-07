@@ -86,3 +86,171 @@ class PGBuffer:
 
         data = dict(obs=self.obs_buf, act=self.act_buf, ret=self.ret_buf, psi=psi, logp=self.logp_buf)
         return {k: torch.as_tensor(v, dtype=torch.float32).to(self.device) for k,v in data.items()}
+
+
+
+
+class HBuffer:
+    """
+    A buffer for storing the History for OSI.
+    """
+
+    def __init__(self, obs_dim, act_dim, discrete, size, args):
+        self.obs_buf = np.zeros((size, obs_dim), dtype=np.float32)
+        if discrete:
+            self.act_buf = np.zeros((size,), dtype=np.float32)
+        else:
+            self.act_buf = np.zeros((size, act_dim), dtype=np.float32)
+
+
+        self.ptr, self.path_start_idx, self.max_size = 0, 0, size
+        self.device = args.device
+
+    def store(self, obs, act, rew, val, logp):
+        """
+        Append one timestep of agent-environment interaction to the buffer.
+        """
+        assert self.ptr < self.max_size     # buffer has to have room so you can store
+        self.obs_buf[self.ptr] = obs
+        self.act_buf[self.ptr] = act
+        self.ptr += 1
+
+    def finish_path(self, last_val=0):
+        """
+        Call this at the end of a trajectory, or when one gets cut off
+        by an epoch ending. This looks back in the buffer to where the
+        trajectory started, and uses rewards and value estimates from
+        the whole trajectory to compute advantage estimates with GAE-Lambda,
+        as well as compute the rewards-to-go for each state, to use as
+        the targets for the value function.
+        The "last_val" argument should be 0 if the trajectory ended
+        because the agent reached a terminal state (died), and otherwise
+        should be V(s_T), the value function estimated for the last state.
+        This allows us to bootstrap the reward-to-go calculation to account
+        for timesteps beyond the arbitrary episode horizon (or epoch cutoff).
+        """
+
+        path_slice = slice(self.path_start_idx, self.ptr)
+        # rews = np.append(self.rew_buf[path_slice], last_val)
+        # vals = np.append(self.val_buf[path_slice], last_val)
+        
+        # # the next two lines implement GAE-Lambda advantage calculation
+        # deltas = rews[:-1] + self.gamma * vals[1:] - vals[:-1]
+        # self.adv_buf[path_slice] = discount_cumsum(deltas, self.gamma * self.lam)
+        
+        # # the next line computes rewards-to-go, to be targets for the value function
+        # self.ret_buf[path_slice] = discount_cumsum(rews, self.gamma)[:-1]
+        
+        self.path_start_idx = self.ptr
+
+    def get(self):
+        """
+        Call this at the end of an epoch to get all of the data from
+        the buffer, with advantages appropriately normalized (shifted to have
+        mean zero and std one). Also, resets some pointers in the buffer.
+        """
+        assert self.ptr == self.max_size    # buffer has to be full before you can get
+        self.ptr, self.path_start_idx = 0, 0
+        # if self.psi_mode == 'future_return':
+        #     psi = self.ret_buf
+        # elif self.psi_mode == 'gae':
+        #     psi = self.adv_buf
+        # else:
+        #     raise Exception
+
+        # normalize psi.  this really helps.  you can try without
+        # psi_mean, psi_std = np.mean(psi), np.std(psi)
+        # psi = (psi - psi_mean) / (psi_std + 1e-5)
+
+        data = dict(obs=self.obs_buf, act=self.act_buf)
+        return {k: torch.as_tensor(v, dtype=torch.float32).to(self.device) for k,v in data.items()}
+
+
+class B_Buffer:
+    """
+    A buffer for training.
+    """
+
+    def __init__(self, H_dim, mu_dim, stretch_size, args):
+        '''
+        stretch_size: KxNxT where a single T represents an H box
+        size is t pairs in an H box
+
+        KxNxTx(t, 9); size=t
+
+        H: (t,6)
+        mu: (1,3)
+        '''
+
+        self.H_buf = np.zeros((stretch_size, args.T, H_dim), dtype=np.float32)
+        self.mu_buf = np.zeros((stretch_size, args.T, mu_dim), dtype=np.float32)
+
+        # if discrete:
+        #     self.act_buf = np.zeros((stretch_size, size_T,), dtype=np.float32)
+        # else:
+        #     self.act_buf = np.zeros((stretch_size, size_T, act_dim), dtype=np.float32)
+
+
+        self.ptr, self.path_start_idx, self.max_size = 0, 0, stretch_size #* size_T
+        self.device = args.device
+
+    def store(self, H, mu, args):#, rew, val, logp):
+        """
+        Append one timestep of agent-environment interaction to the buffer.
+        """
+        assert self.ptr < self.max_size     # buffer has to have room so you can store
+        #print("self.H_buf, self.ptr, H", self.H_buf.shape, self.ptr, len(H))#; stop
+
+        self.H_buf[self.ptr] = H
+        self.mu_buf[self.ptr] = mu
+        self.ptr += 1
+
+    def finish_path(self, last_val=0):
+        """
+        Call this at the end of a trajectory, or when one gets cut off
+        by an epoch ending. This looks back in the buffer to where the
+        trajectory started, and uses rewards and value estimates from
+        the whole trajectory to compute advantage estimates with GAE-Lambda,
+        as well as compute the rewards-to-go for each state, to use as
+        the targets for the value function.
+        The "last_val" argument should be 0 if the trajectory ended
+        because the agent reached a terminal state (died), and otherwise
+        should be V(s_T), the value function estimated for the last state.
+        This allows us to bootstrap the reward-to-go calculation to account
+        for timesteps beyond the arbitrary episode horizon (or epoch cutoff).
+        """
+
+        path_slice = slice(self.path_start_idx, self.ptr)
+        # rews = np.append(self.rew_buf[path_slice], last_val)
+        # vals = np.append(self.val_buf[path_slice], last_val)
+        
+        # # the next two lines implement GAE-Lambda advantage calculation
+        # deltas = rews[:-1] + self.gamma * vals[1:] - vals[:-1]
+        # self.adv_buf[path_slice] = discount_cumsum(deltas, self.gamma * self.lam)
+        
+        # # the next line computes rewards-to-go, to be targets for the value function
+        # self.ret_buf[path_slice] = discount_cumsum(rews, self.gamma)[:-1]
+        
+        self.path_start_idx = self.ptr
+
+    def get(self):
+        """
+        Call this at the end of an epoch to get all of the data from
+        the buffer, with advantages appropriately normalized (shifted to have
+        mean zero and std one). Also, resets some pointers in the buffer.
+        """
+        assert self.ptr == self.max_size    # buffer has to be full before you can get
+        self.ptr, self.path_start_idx = 0, 0
+        # if self.psi_mode == 'future_return':
+        #     psi = self.ret_buf
+        # elif self.psi_mode == 'gae':
+        #     psi = self.adv_buf
+        # else:
+        #     raise Exception
+
+        # normalize psi.  this really helps.  you can try without
+        # psi_mean, psi_std = np.mean(psi), np.std(psi)
+        # psi = (psi - psi_mean) / (psi_std + 1e-5)
+
+        data = dict(H=self.H_buf, mu=self.mu_buf)
+        return {k: torch.as_tensor(v, dtype=torch.float32).to(self.device) for k,v in data.items()}
