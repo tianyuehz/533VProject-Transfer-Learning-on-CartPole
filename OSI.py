@@ -216,35 +216,6 @@ def main(args):
     # file = project_dir + 'save_OSI_models/OSI_retrain_mismatch_weight_dec9.pth'
     # torch.save(model, file)
     
-    '''
-    TODOS:
-    - Add terminal?
-    - Use Helen's updated policy?
-    - Shouldnt we fix K=30 envs? No, we sample new mu for every K in pseudocode
-    - Ks at OSI and UP? same envs? No, we sample new mu for every K in pseudocode
-
-    1. Train OSI (On true labels), save model
-    2. Re-train OSI (On predicted labels using model in 1), save model
-    3. Combine 2 with UP to give complete network, save model
-    4. Maybe - Refine (policy) in complete network, save model
-    5. Train UP-OSI end-to-end (your extension) close to Ben?
-    6. Send Michiel an email just in case.
-
-
-    * Decoupling architecture figure, pseudocode,
-    * L1 loss/equations, evaluation range?
-    * Metrics- sample efficiency, 
-    * Mean and std of the predicted model parameter vs actual/true.
-    * Training plots, screenshots etc
-    * Ablation studies.
-    * terminate rollout? Page 8.
-    * We normalize the resulting reward. Page 8.
-    (Last implementation/results day).
-
-
-    - connect OSI with UP as regularizer - Ben__
-    '''
-
 
 
 if __name__ == '__main__':
