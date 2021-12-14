@@ -45,7 +45,7 @@ def main(args):
     bufB = B_Buffer(H_dim, mu_dim, stretch_size, args)
 
     # actor critic 
-    discrete = False
+    discrete = True
     ac = ActorCritic(obs_dim_input, act_input, discrete).to(args.device)
 
     # Load trained Policy
@@ -80,10 +80,8 @@ def main(args):
             for t_index in range(args.T):
 
                 o = np.concatenate((o, env_params), dtype=np.float32); #print("o", o)
-                a, v, logp = ac.step(torch.as_tensor(o, dtype=torch.float32).to(args.device))
+                a, v, logp = ac.step(torch.as_tensor(o, dtype=torch.float32).to(args.device)); #print("a", a);stop
                 next_o, r, d, _ = env.step(a)
-
-                #print("next_o", next_o)
 
                 #print(next_o.reshape(-1).shape, a)
                 #xx = np.append(next_o.reshape(-1), a); print("xx", xx);stop
