@@ -1,8 +1,62 @@
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.distributions.normal import Normal
 from torch.distributions.categorical import Categorical
+
+
+
+class OSI(nn.Module):
+    """Network definition to be used for the OSI model"""
+
+    def __init__(self, in_dim, out_dim):
+        super().__init__()
+        # NOTE: feel free to experiment with this network
+
+        # self.lin1 = nn.Linear(in_dim, 64)
+        # #self.BatchN = nn.BatchNorm1d(64)
+        # self.linout = nn.Linear(64, out_dim)
+        
+
+
+        self.lin1 = nn.Linear(in_dim, 256)
+        self.lin2 = nn.Linear(256, 128)
+        self.lin3 = nn.Linear(128, 64)
+        self.linout = nn.Linear(64, out_dim)
+
+        self.drop = nn.Dropout(p=0.1)
+
+        # initialize weights and bias to 0 in the last layer.
+        # this ensures the actors starts out completely random in the beginning, and that the value function starts at 0
+        # this can help training.  you can experiment with turning it off.
+        # self.linout.bias.data.fill_(0.0)
+        # self.linout.weight.data.fill_(0.0)
+
+    def forward(self, inputs):
+        """
+        Args:
+            inputs (torch.Tensor):  (BS, in_dim)
+        Returns:
+            torch.Tensor:  (BS, out_dim)
+        """
+        #print("inputs", inputs)
+        x = self.lin1(inputs)
+        #x = self.BatchN(x)
+        x = torch.tanh(x)
+        x = self.drop(x)
+
+        x = self.lin2(x)
+        x = torch.tanh(x)
+        x = self.drop(x)
+
+        x = self.lin3(x)
+        x = torch.tanh(x)
+        x = self.drop(x)
+
+        x = self.linout(x)
+        
+        return x
 
 
 class Network(nn.Module):
@@ -27,10 +81,13 @@ class Network(nn.Module):
         Returns:
             torch.Tensor:  (BS, out_dim)
         """
+        #print("inputs", inputs)
         x = self.linin(inputs)
         x = torch.relu(x)
         x = self.linout(x)
         return x
+
+
 
 
 # NOTE: policy gradient methods can handle discrete or continuous actions.
@@ -92,8 +149,10 @@ class ActorCritic(nn.Module):
         # build actor network
         self.discrete = discrete
         if self.discrete:
+            '''uses the same Network to later return prob and logprob of taking an action'''
             self.pi = DiscreteActor(obs_dim, act_dim)
         else:
+            '''uses the same Network to later return prob and logprob of taking an action'''
             self.pi = GaussianActor(obs_dim, act_dim)
         # build value function
         self.v = Network(obs_dim, 1)
@@ -103,9 +162,14 @@ class ActorCritic(nn.Module):
         # no_grad, since we don't need to do any backprop while we collect data.
         # this means we will have to recompute forward passes later. (this is standard)
         with torch.no_grad():
+            '''the prob and logprob of taking an action'''
+            #print("obs in AC step", obs.shape)
             pi, _ = self.pi(obs)
+            '''sample an action from that prob - we are doing rollouts/inference, so it nots fixed'''
             a = pi.sample()
+            '''get its logprob'''
             logp_a = pi.log_prob(a) if self.discrete else pi.log_prob(a).sum(axis=-1)
+            '''corresponding Q-value'''
             v = self.v(obs)
         return a.cpu().numpy(), v.cpu().numpy(), logp_a.cpu().numpy()
 
