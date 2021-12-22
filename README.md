@@ -1,4 +1,4 @@
-# 533VProject: Transfer learning on cart-pole
+# 533VProject: Transfer learning on Cart-Pole
 This is the github repository for a course project, Transfer Learning via Online System Identification, where we implemented an universal policy and an online system identification for the OpenAI [Cart-Pole](https://gym.openai.com/envs/CartPole-v0/) environment.
 
 # Background
